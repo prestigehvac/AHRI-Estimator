@@ -288,6 +288,9 @@ def main():
         st.warning("No valid AHRI pricing records extracted from vendor folder.")
         return
 
+    # ------------------------------------------
+    # TAB DISPLAY & FILTERING LOGIC
+    # ------------------------------------------
     selected_tonnage = st.tabs(tab_names)
 
     for idx, tab in enumerate(selected_tonnage):
@@ -296,43 +299,38 @@ def main():
             st.write(f"### Master Units for {ton_label}")
             master_df = master_sheets[ton_label]
 
-            # Parse out valid AHRI numbers specifically from this tab
+            # 1. Extract 9-digit AHRI numbers specifically from this Master tab
             def find_ahri_in_row(row):
                 row_str = " ".join([str(val) for val in row.values if pd.notna(val)])
                 matches = re.findall(r'(?<!\d)\d{9}(?!\d)', row_str)
                 return matches[0] if matches else None
 
             master_df['Clean_AHRI'] = master_df.apply(find_ahri_in_row, axis=1)
-            master_clean = master_df.dropna(subset=['Clean_AHRI']).copy()
+            
+            # 2. Get unique AHRI numbers for this tab only
+            valid_tab_ahris = master_df['Clean_AHRI'].dropna().unique()
 
-            # Ensure master_clean only keeps distinct AHRI numbers for this tab
-            master_clean = master_clean.drop_duplicates(subset=['Clean_AHRI'])
+            # 3. Filter vendor database down to ONLY AHRI numbers in this tab
+            filtered_vendor_db = vendor_db[vendor_db['AHRI Number'].isin(valid_tab_ahris)].copy()
 
-            # Inner join ensures only vendor pricing matching this tab's Master AHRI list is displayed
-            merged = pd.merge(
-                master_clean, 
-                vendor_db, 
-                left_on='Clean_AHRI', 
-                right_on='AHRI Number', 
-                how='inner'
-            )
-
-            if merged.empty:
-                st.info(f"No vendor matches found for AHRI units in {ton_label}.")
+            if filtered_vendor_db.empty:
+                st.info(f"No vendor matches found for the {len(valid_tab_ahris)} AHRI units in {ton_label}.")
             else:
-                vendors = merged['Vendor Sheet'].unique()
+                vendors = filtered_vendor_db['Vendor Sheet'].unique()
                 selected_vendor = st.selectbox(
                     f"Filter by Vendor Sheet ({ton_label}):",
                     ["All Vendors"] + list(vendors),
                     key=f"vendor_select_{ton_label}"
                 )
 
-                display_df = merged if selected_vendor == "All Vendors" else merged[merged['Vendor Sheet'] == selected_vendor]
+                display_df = (
+                    filtered_vendor_db 
+                    if selected_vendor == "All Vendors" 
+                    else filtered_vendor_db[filtered_vendor_db['Vendor Sheet'] == selected_vendor]
+                )
 
-                final_table = display_df[['Clean_AHRI', 'Vendor Sheet', 'System Price']].copy()
-                final_table.columns = ['AHRI Number', 'Vendor Sheet', 'System Price']
-                
-                # Create a numeric column for calculation while formatting System Price for display
+                # Prepare table for display
+                final_table = display_df[['AHRI Number', 'Vendor Sheet', 'System Price']].copy()
                 numeric_prices = final_table['System Price']
                 final_table['System Price'] = final_table['System Price'].map("${:,.2f}".format)
 
