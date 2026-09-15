@@ -1,7 +1,6 @@
 import os
 import re
 import glob
-import requests
 import pandas as pd
 import pdfplumber
 import streamlit as st
@@ -42,28 +41,7 @@ def calculate_customer_investment(base_equipment_price, misc_cost, labor_cost, m
     )
 
 # ==========================================
-# 2. AHRI LIVE LOOKUP LOGIC
-# ==========================================
-def fetch_ahri_details(ahri_number):
-    """Fetches details from AHRI Directory with custom browser headers to bypass HTTP 403."""
-    url = f"https://www.ahridirectory.org/Search/SearchMaster?Services=79&AHRIID={ahri_number}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Referer": "https://www.ahridirectory.org/"
-    }
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.text
-        else:
-            return f"HTTP Error {response.status_code}"
-    except Exception as e:
-        return f"Error fetching data: {e}"
-
-# ==========================================
-# 3. PARSING & EXTRACTION LOGIC
+# 2. PARSING & EXTRACTION LOGIC
 # ==========================================
 def extract_number_from_cell(cell_val):
     if pd.isna(cell_val):
@@ -198,7 +176,7 @@ def load_and_build_vendor_db(vendor_folder):
     return df, processed_files, failed_or_empty_files
 
 # ==========================================
-# 4. STREAMLIT INTERFACE
+# 3. STREAMLIT INTERFACE
 # ==========================================
 APP_PASSWORD = "Pr3$t1g375098!"  # Set your desired password here
 
@@ -208,23 +186,10 @@ def main():
     st.subheader("Field Tech Look-Up Portal")
 
     # ------------------------------------------
-    # SIDEBAR AHRI LOOKUP & AUTHENTICATION
+    # SIDEBAR EXTERNAL LINK & AUTHENTICATION
     # ------------------------------------------
-    st.sidebar.header("🔍 AHRI Live Lookup")
-    ahri_input = st.sidebar.text_input("Enter AHRI Reference Number", value="216613778")
-    if st.sidebar.button("Fetch AHRI Data"):
-        if ahri_input.strip():
-            with st.spinner("Fetching..."):
-                result = fetch_ahri_details(ahri_input.strip())
-                if isinstance(result, str) and result.startswith("HTTP Error"):
-                    st.sidebar.error(result)
-                elif isinstance(result, str) and result.startswith("Error"):
-                    st.sidebar.error(result)
-                else:
-                    st.sidebar.success("Successfully fetched AHRI data!")
-                    st.sidebar.expander("View Response").write(result[:500] + "...")
-        else:
-            st.sidebar.warning("Please enter a valid AHRI number.")
+    st.sidebar.header("🔗 External Directory")
+    st.sidebar.markdown("[🌐 Open AHRI Directory Website](https://www.ahridirectory.org/)")
 
     st.sidebar.markdown("---")
     st.sidebar.header("🔒 Access Control")
@@ -337,7 +302,7 @@ def main():
                     else filtered_vendor_db[filtered_vendor_db['Vendor Sheet'] == selected_vendor]
                 )
 
-                st.dataframe(display_df, use_container_width=True)
+                st.dataframe(display_df, width="stretch")
 
     # ------------------------------------------
     # CUSTOMER INVESTMENT CALCULATOR
