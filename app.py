@@ -369,4 +369,44 @@ def main():
                     col4.metric("Final Customer Investment", f"${final_investment:,.2f}")
 
 if __name__ == "__main__":
+
+# ------------------------------------------
+    # SIDEBAR LIVE AHRI LOOKUP
+    # ------------------------------------------
+    st.sidebar.markdown("---")
+    st.sidebar.header("🔍 AHRI Live Lookup")
+    ahri_id = st.sidebar.text_input("Enter AHRI Reference Number", value="", key="sidebar_ahri_input")
+
+    if st.sidebar.button("Fetch AHRI Data"):
+        if ahri_id.strip():
+            target_url = f"https://ahridirectory.org/details/101/{ahri_id.strip()}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            with st.sidebar.spinner("Fetching AHRI details..."):
+                try:
+                    response = requests.get(target_url, headers=headers, timeout=10)
+                    if response.status_code == 200:
+                        soup = BeautifulSoup(response.text, "html.parser")
+                        data = {}
+                        for row in soup.find_all("tr"):
+                            cols = row.find_all(["th", "td"])
+                            if len(cols) >= 2:
+                                key = cols[0].text.strip().replace(":", "")
+                                val = cols[1].text.strip()
+                                if key and val:
+                                    data[key] = val
+                        if data:
+                            st.sidebar.success(f"Found #{ahri_id}")
+                            st.sidebar.json(data)
+                        else:
+                            st.sidebar.warning("No data found for this Reference #.")
+                    else:
+                        st.sidebar.error(f"HTTP Error {response.status_code}")
+                except Exception as e:
+                    st.sidebar.error(f"Error fetching data: {e}")
+        else:
+            st.sidebar.warning("Please enter a valid AHRI Reference Number.")
+
+if __name__ == "__main__":
     main()
