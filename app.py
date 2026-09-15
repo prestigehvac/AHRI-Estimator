@@ -1,7 +1,7 @@
-import requests
 import os
 import re
 import glob
+import requests
 import pandas as pd
 import pdfplumber
 import streamlit as st
@@ -13,26 +13,26 @@ def calculate_customer_investment(base_equipment_price, misc_cost, labor_cost, m
     """Calculates final customer investment from base equipment price."""
     if pd.isna(base_equipment_price) or base_equipment_price is None or base_equipment_price <= 0:
         return 0.0, 0.0, 0.0, 0.0, 0.0
-
+    
     tax_decimal = tax_rate_pct / 100.0
-
+    
     # Step 1: Equipment + Misc Cost
     equipment_misc_subtotal = base_equipment_price + misc_cost
-
+    
     # Step 2: Sales Tax (applied to Equipment + Misc)
     tax_amount = equipment_misc_subtotal * tax_decimal
     post_tax_subtotal = equipment_misc_subtotal + tax_amount
-
+    
     # Step 3: Add Labor Cost
     subtotal_with_labor = post_tax_subtotal + labor_cost
-
+    
     # Step 4: Divide by Margin Decimal
     effective_margin = max(margin_decimal, 0.01)
     total_cost_base = subtotal_with_labor / effective_margin
-
+    
     # Step 5: Increase by Markup %
     final_customer_investment = total_cost_base * (1 + markup_pct)
-
+    
     return (
         equipment_misc_subtotal,
         tax_amount,
@@ -41,9 +41,29 @@ def calculate_customer_investment(base_equipment_price, misc_cost, labor_cost, m
         final_customer_investment
     )
 
+# ==========================================
+# 2. AHRI LIVE LOOKUP LOGIC
+# ==========================================
+def fetch_ahri_details(ahri_number):
+    """Fetches details from AHRI Directory with custom browser headers to bypass HTTP 403."""
+    url = f"https://www.ahridirectory.org/Search/SearchMaster?Services=79&AHRIID={ahri_number}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": "https://www.ahridirectory.org/"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return response.text
+        else:
+            return f"HTTP Error {response.status_code}"
+    except Exception as e:
+        return f"Error fetching data: {e}"
 
 # ==========================================
-# 2. PARSING & EXTRACTION LOGIC
+# 3. PARSING & EXTRACTION LOGIC
 # ==========================================
 def extract_number_from_cell(cell_val):
     if pd.isna(cell_val):
@@ -82,7 +102,7 @@ def process_excel_csv_vendor_file(file_path):
             sheets_dict = {'CSV': pd.read_csv(file_path, header=None, dtype=str)}
         else:
             sheets_dict = pd.read_excel(file_path, header=None, sheet_name=None, dtype=str)
-
+            
         for sheet_name, df in sheets_dict.items():
             if df.empty:
                 continue
@@ -94,15 +114,12 @@ def process_excel_csv_vendor_file(file_path):
                 ahri_matches = re.findall(r'(?<!\d)\d{9}(?!\d)', row_str)
                 if not ahri_matches:
                     continue
-                
                 last_cell = str(row_vals[-1]).strip()
                 system_price = extract_number_from_cell(last_cell)
-                
                 if system_price is None:
                     extracted = extract_all_numbers_from_str(last_cell)
                     if extracted:
                         system_price = extracted[-1]
-
                 if system_price is not None:
                     for ahri in set(ahri_matches):
                         records.append({
@@ -127,7 +144,6 @@ def process_pdf_vendor_file(file_path):
                             clean_line = " ".join(line.split())
                             ahri_matches = re.findall(r'(?<!\d)\d{9}(?!\d)', clean_line)
                             prices = extract_all_numbers_from_str(clean_line)
-                            
                             if ahri_matches and prices:
                                 system_price = prices[-1]
                                 for ahri in set(ahri_matches):
@@ -147,62 +163,73 @@ def load_and_build_vendor_db(vendor_folder):
     all_records = []
     processed_files = []
     failed_or_empty_files = []
-
+    
     if not os.path.exists(vendor_folder):
         return pd.DataFrame(), processed_files, failed_or_empty_files
-
+        
     search_path = os.path.join(vendor_folder, "**", "*")
     file_paths = glob.glob(search_path, recursive=True)
-
+    
     for path in file_paths:
         if os.path.isdir(path):
             continue
         file_name = os.path.basename(path)
-        
-        # Skip temporary Excel lock files (~$)
         if file_name.startswith("~$"):
             continue
-
         ext = os.path.splitext(path)[1].lower()
         file_records = []
-
         if ext == '.pdf':
             file_records = process_pdf_vendor_file(path)
         elif ext in ['.xlsx', '.xls', '.csv']:
             file_records = process_excel_csv_vendor_file(path)
-
+            
         if file_records:
             all_records.extend(file_records)
             processed_files.append(f"{file_name} ({len(file_records)} records)")
         elif ext in ['.pdf', '.xlsx', '.xls', '.csv']:
             failed_or_empty_files.append(file_name)
-
+            
     if not all_records:
         return pd.DataFrame(), processed_files, failed_or_empty_files
-
+        
     df = pd.DataFrame(all_records)
     df = df.sort_values(by='System Price', ascending=False)
     df = df.drop_duplicates(subset=['AHRI Number', 'Vendor Sheet'], keep='first')
     return df, processed_files, failed_or_empty_files
 
-
 # ==========================================
-# 3. STREAMLIT INTERFACE
+# 4. STREAMLIT INTERFACE
 # ==========================================
 APP_PASSWORD = "Pr3$t1g375098!"  # Set your desired password here
 
 def main():
     st.set_page_config(page_title="HVAC Unit Price Estimator", layout="wide")
-
     st.title("⚡ HVAC Unit Price Estimator")
     st.subheader("Field Tech Look-Up Portal")
 
     # ------------------------------------------
-    # SIDEBAR AUTHENTICATION
+    # SIDEBAR AHRI LOOKUP & AUTHENTICATION
     # ------------------------------------------
+    st.sidebar.header("🔍 AHRI Live Lookup")
+    ahri_input = st.sidebar.text_input("Enter AHRI Reference Number", value="216613778")
+    if st.sidebar.button("Fetch AHRI Data"):
+        if ahri_input.strip():
+            with st.spinner("Fetching..."):
+                result = fetch_ahri_details(ahri_input.strip())
+                if isinstance(result, str) and result.startswith("HTTP Error"):
+                    st.sidebar.error(result)
+                elif isinstance(result, str) and result.startswith("Error"):
+                    st.sidebar.error(result)
+                else:
+                    st.sidebar.success("Successfully fetched AHRI data!")
+                    st.sidebar.expander("View Response").write(result[:500] + "...")
+        else:
+            st.sidebar.warning("Please enter a valid AHRI number.")
+
+    st.sidebar.markdown("---")
     st.sidebar.header("🔒 Access Control")
     password_input = st.sidebar.text_input("Enter Password", type="password")
-
+    
     if password_input != APP_PASSWORD:
         if password_input:
             st.sidebar.error("Incorrect Password")
@@ -218,31 +245,19 @@ def main():
     # SIDEBAR CONTROLS (UNLOCKED)
     # ------------------------------------------
     st.sidebar.header("⚙️ Pricing & Margin Setup")
-    
-    misc_cost = st.sidebar.number_input(
-        "Misc Cost ($)", min_value=0.0, value=700.0, step=50.0
-    )
-    tax_rate_pct = st.sidebar.number_input(
-        "Sales Tax Rate (%)", min_value=0.0, value=8.25, step=0.25, format="%.2f",
-        help="Enter 8.25 for an 8.25% tax rate."
-    )
-    labor_cost = st.sidebar.number_input(
-        "Labor Cost ($)", min_value=0.0, value=1200.0, step=50.0
-    )
-    margin_decimal = st.sidebar.number_input(
-        "Margin Factor (Decimal)", min_value=0.01, max_value=0.99, value=0.60, step=0.05
-    )
-    markup_pct = st.sidebar.number_input(
-        "Markup Percentage (%)", min_value=0.0, value=15.0, step=1.0
-    ) / 100.0
+    misc_cost = st.sidebar.number_input("Misc Cost ($)", min_value=0.0, value=700.0, step=50.0)
+    tax_rate_pct = st.sidebar.number_input("Sales Tax Rate (%)", min_value=0.0, value=8.25, step=0.25, format="%.2f", help="Enter 8.25 for an 8.25% tax rate.")
+    labor_cost = st.sidebar.number_input("Labor Cost ($)", min_value=0.0, value=1200.0, step=50.0)
+    margin_decimal = st.sidebar.number_input("Margin Factor (Decimal)", min_value=0.01, max_value=0.99, value=0.60, step=0.05)
+    markup_pct = st.sidebar.number_input("Markup Percentage (%)", min_value=0.0, value=15.0, step=1.0) / 100.0
 
     st.sidebar.markdown("---")
     st.sidebar.header("📁 File Configuration")
-    
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(script_dir, "data")
-    
     excel_files = glob.glob(os.path.join(data_dir, "*.xlsx")) + glob.glob(os.path.join(data_dir, "*.xls"))
+
     default_master_path = excel_files[0] if excel_files else os.path.join(data_dir, "Master_ahri.xlsx")
     default_vendor_folder = os.path.join(data_dir, "vendor_files")
 
@@ -256,9 +271,7 @@ def main():
     # ------------------------------------------
     # MASTER & VENDOR SHEET PROCESSING
     # ------------------------------------------
-    master_source = uploaded_master if uploaded_master is not None else (
-        default_master_path if os.path.exists(default_master_path) else None
-    )
+    master_source = uploaded_master if uploaded_master is not None else (default_master_path if os.path.exists(default_master_path) else None)
 
     if master_source:
         try:
@@ -300,18 +313,13 @@ def main():
             st.write(f"### Master Units for {ton_label}")
             master_df = master_sheets[ton_label]
 
-            # 1. Extract 9-digit AHRI numbers specifically from this Master tab
             def find_ahri_in_row(row):
                 row_str = " ".join([str(val) for val in row.values if pd.notna(val)])
                 matches = re.findall(r'(?<!\d)\d{9}(?!\d)', row_str)
                 return matches[0] if matches else None
 
             master_df['Clean_AHRI'] = master_df.apply(find_ahri_in_row, axis=1)
-            
-            # 2. Get unique AHRI numbers for this tab only
             valid_tab_ahris = master_df['Clean_AHRI'].dropna().unique()
-
-            # 3. Filter vendor database down to ONLY AHRI numbers in this tab
             filtered_vendor_db = vendor_db[vendor_db['AHRI Number'].isin(valid_tab_ahris)].copy()
 
             if filtered_vendor_db.empty:
@@ -323,91 +331,37 @@ def main():
                     ["All Vendors"] + list(vendors),
                     key=f"vendor_select_{ton_label}"
                 )
-
                 display_df = (
-                    filtered_vendor_db 
-                    if selected_vendor == "All Vendors" 
+                    filtered_vendor_db
+                    if selected_vendor == "All Vendors"
                     else filtered_vendor_db[filtered_vendor_db['Vendor Sheet'] == selected_vendor]
                 )
 
-                # Prepare table for display
-                final_table = display_df[['AHRI Number', 'Vendor Sheet', 'System Price']].copy()
-                numeric_prices = final_table['System Price']
-                final_table['System Price'] = final_table['System Price'].map("${:,.2f}".format)
+                st.dataframe(display_df, use_container_width=True)
 
-                st.dataframe(final_table, use_container_width=True)
-
-                # ------------------------------------------
-                # SINGLE UNIT CALCULATION OUTPUT
-                # ------------------------------------------
-                st.markdown("---")
-                st.subheader("💡 Customer Investment Calculator")
-
-                default_unit_price = float(numeric_prices.iloc[0]) if not final_table.empty else 0.0
-
-                selected_price = st.number_input(
-                    f"Select or enter System Price from above table ({ton_label}):",
-                    min_value=0.0,
-                    value=default_unit_price,
-                    step=50.0,
-                    key=f"price_input_{ton_label}"
-                )
-
-                if selected_price > 0:
-                    subtotal_misc, tax_amt, subtotal_labor, cost_base, final_investment = calculate_customer_investment(
-                        base_equipment_price=selected_price,
-                        misc_cost=misc_cost,
-                        labor_cost=labor_cost,
-                        margin_decimal=margin_decimal,
-                        markup_pct=markup_pct,
-                        tax_rate_pct=tax_rate_pct
-                    )
-
-                    col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("Base Price + Misc", f"${subtotal_misc:,.2f}")
-                    col2.metric(f"Sales Tax ({tax_rate_pct:.2f}%)", f"${tax_amt:,.2f}")
-                    col3.metric("Total Cost Base", f"${cost_base:,.2f}")
-                    col4.metric("Final Customer Investment", f"${final_investment:,.2f}")
-
-if __name__ == "__main__":
-
-# ------------------------------------------
-    # SIDEBAR LIVE AHRI LOOKUP
     # ------------------------------------------
-    st.sidebar.markdown("---")
-    st.sidebar.header("🔍 AHRI Live Lookup")
-    ahri_id = st.sidebar.text_input("Enter AHRI Reference Number", value="", key="sidebar_ahri_input")
+    # CUSTOMER INVESTMENT CALCULATOR
+    # ------------------------------------------
+    st.markdown("---")
+    st.header("💡 Customer Investment Calculator")
 
-    if st.sidebar.button("Fetch AHRI Data"):
-        if ahri_id.strip():
-            target_url = f"https://ahridirectory.org/details/101/{ahri_id.strip()}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-            with st.sidebar.spinner("Fetching AHRI details..."):
-                try:
-                    response = requests.get(target_url, headers=headers, timeout=10)
-                    if response.status_code == 200:
-                        soup = BeautifulSoup(response.text, "html.parser")
-                        data = {}
-                        for row in soup.find_all("tr"):
-                            cols = row.find_all(["th", "td"])
-                            if len(cols) >= 2:
-                                key = cols[0].text.strip().replace(":", "")
-                                val = cols[1].text.strip()
-                                if key and val:
-                                    data[key] = val
-                        if data:
-                            st.sidebar.success(f"Found #{ahri_id}")
-                            st.sidebar.json(data)
-                        else:
-                            st.sidebar.warning("No data found for this Reference #.")
-                    else:
-                        st.sidebar.error(f"HTTP Error {response.status_code}")
-                except Exception as e:
-                    st.sidebar.error(f"Error fetching data: {e}")
-        else:
-            st.sidebar.warning("Please enter a valid AHRI Reference Number.")
+    selected_ton_label = tab_names[0]
+    base_price = st.number_input(
+        f"Select or enter System Price from above table ({selected_ton_label}):",
+        min_value=0.0,
+        value=5191.28,
+        step=50.0
+    )
+
+    eq_misc, tax, sub_labor, total_cost, final_inv = calculate_customer_investment(
+        base_price, misc_cost, labor_cost, margin_decimal, markup_pct, tax_rate_pct
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Base Price + Misc", f"${eq_misc:,.2f}")
+    col2.metric(f"Sales Tax ({tax_rate_pct:.2f}%)", f"${tax:,.2f}")
+    col3.metric("Total Cost Base", f"${total_cost:,.2f}")
+    col4.metric("Final Customer Investment", f"${final_inv:,.2f}")
 
 if __name__ == "__main__":
     main()
